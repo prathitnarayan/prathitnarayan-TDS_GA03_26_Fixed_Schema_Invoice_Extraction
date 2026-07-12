@@ -1,1 +1,0 @@
-# prathitnarayan-TDS_GA03_26_Fixed_Schema_Invoice_Extraction
