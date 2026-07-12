@@ -54,40 +54,70 @@ def extract_invoice_no(text):
 
 
 def parse_date_token(raw):
-    raw = raw.strip()
-    m = re.match(r'(\d{4})-(\d{1,2})-(\d{1,2})', raw)
+    if not raw:
+        return None
+    raw = raw.strip().strip('.,;')
+    # strip ordinal suffixes: 22nd -> 22, 3rd -> 3, etc.
+    raw = re.sub(r'(\d)(st|nd|rd|th)\b', r'\1', raw, flags=re.IGNORECASE)
+
+    month_names = sorted(MONTHS.keys(), key=len, reverse=True)
+    month_alt = '|'.join(month_names)
+
+    # YYYY-MM-DD / YYYY/MM/DD / YYYY.MM.DD
+    m = re.search(r'\b(\d{4})[/\-\.](\d{1,2})[/\-\.](\d{1,2})\b', raw)
     if m:
         y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        return f"{y:04d}-{mo:02d}-{d:02d}"
-    m = re.match(r'(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})', raw)
-    if m:
-        d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        return f"{y:04d}-{mo:02d}-{d:02d}"
-    m = re.match(r'(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})', raw)
+        if 1 <= mo <= 12 and 1 <= d <= 31:
+            return f"{y:04d}-{mo:02d}-{d:02d}"
+
+    # DD <sep>? Month <sep>? YYYY  — covers "22 May 2026", "22-May-2026", "22.May.2026", "22nd May, 2026"
+    m = re.search(rf'\b(\d{{1,2}})\s*[-/\.,]?\s*({month_alt})\s*[-/\.,]?\s*(\d{{4}})\b', raw, re.IGNORECASE)
     if m:
         d = int(m.group(1))
-        mon = MONTHS.get(m.group(2).lower())
+        mo = MONTHS.get(m.group(2).lower())
         y = int(m.group(3))
-        if mon:
-            return f"{y:04d}-{mon:02d}-{d:02d}"
-    m = re.match(r'([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})', raw)
+        if mo:
+            return f"{y:04d}-{mo:02d}-{d:02d}"
+
+    # Month DD, YYYY  — covers "May 22, 2026", "May-22-2026"
+    m = re.search(rf'\b({month_alt})\s*[-/\.,]?\s*(\d{{1,2}})\s*[-/\.,]?\s*(\d{{4}})\b', raw, re.IGNORECASE)
     if m:
-        mon = MONTHS.get(m.group(1).lower())
+        mo = MONTHS.get(m.group(1).lower())
         d = int(m.group(2))
         y = int(m.group(3))
-        if mon:
-            return f"{y:04d}-{mon:02d}-{d:02d}"
+        if mo:
+            return f"{y:04d}-{mo:02d}-{d:02d}"
+
+    # Purely numeric DD/MM/YYYY or MM/DD/YYYY (disambiguate: default DD/MM, swap if only one order is valid)
+    m = re.search(r'\b(\d{1,2})[/\-\.](\d{1,2})[/\-\.](\d{4})\b', raw)
+    if m:
+        a, b, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if a > 12 >= b:
+            d, mo = a, b
+        elif b > 12 >= a:
+            d, mo = b, a
+        else:
+            d, mo = a, b  # default to DD/MM
+        if 1 <= mo <= 12 and 1 <= d <= 31:
+            return f"{y:04d}-{mo:02d}-{d:02d}"
+
     return None
 
 
 def extract_date(text):
+    # Stage 1: look on the same line as a recognizable date label
     m = re.search(
-        r'(?:Invoice\s*Date|Date|Issued|Dated)\s*[:\-]?\s*([0-9A-Za-z,/\-\s]+?)(?:\n|$)',
+        r'(?:Invoice\s*Date|Date\s*of\s*Issue|Bill\s*Date|Dated\s*on|Invoice\s*Dated|'
+        r'Date\s*Issued|Order\s*Date|Date|Issued|Dated)\s*[:\-]?\s*([0-9A-Za-z,/\.\-\s]+?)(?:\n|$)',
         text, re.IGNORECASE,
     )
     if m:
-        return parse_date_token(m.group(1))
-    return None
+        parsed = parse_date_token(m.group(1))
+        if parsed:
+            return parsed
+
+    # Stage 2: fall back to scanning the whole text for any date-shaped token
+    return parse_date_token(text)
 
 
 def extract_vendor(text):
